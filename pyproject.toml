@@ -33,6 +33,9 @@ pyyaml = "^6.0.1"
 typing-extensions = "^4.10.0"
 simple-parsing = "^0.1.6"
 tenacity = ">=9.0.0"
+circuitsvis = "^1.43.3"
+sae-dashboard = "^0.7.3"
+accelerate = "^1.12.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.2"

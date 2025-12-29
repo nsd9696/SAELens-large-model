@@ -5,6 +5,7 @@ from sae_lens import (
     BatchTopKTrainingSAEConfig,
     LoggingConfig,
 )
+from transformers.distributed import DistributedConfig
 from sae_lens.load_model import load_model
 from datasets import load_dataset
 
@@ -23,7 +24,9 @@ gptoss_d_sae = gptoss_d_in * 4
 gptoss_hook_name = "model.layers.23.mlp"
 
 
-model = load_model(model_name=gptoss_model_name, model_class_name = "AutoModelForCausalLM", device=device, model_from_pretrained_kwargs={"device_map": "auto"})
+model = load_model(model_name=gptoss_model_name, model_class_name = "AutoModelForCausalLM", device=device, 
+                   model_from_pretrained_kwargs={"device_map": "auto"}
+                   )
 stream_ds = load_dataset(
     "json",
     data_files=[
@@ -58,6 +61,10 @@ cfg = LanguageModelSAERunnerConfig(
         d_sae=gptoss_d_sae,  # the width of the SAE. Larger will result in better stats but slower training.
         apply_b_dec_to_input=False,  # We won't apply the decoder weights to the input.
         normalize_activations="expected_average_only_in",
+        # Router entropy settings (optional)
+        use_router_entropy=True,  # Enable router entropy adjustment
+        router_entropy_layer="model.layers.23.mlp.router",  # Router layer hook name
+        router_entropy_weight=1.0,  # Weight for router entropy adjustment (default: 0.1)
     ),
     # Training Parameters
     lr=5e-5,  # lower the better, we'll go fairly high to speed up the tutorial.

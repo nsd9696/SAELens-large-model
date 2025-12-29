@@ -127,6 +127,7 @@ class LanguageModelSAERunnerConfig(Generic[T_TRAINING_SAE_CONFIG]):
         model_name (str): The name of the model to use. This should be the name of the model in the Hugging Face model hub.
         model_class_name (str): The name of the class of the model to use. This should be either `HookedTransformer` or `HookedMamba`.
         hook_name (str): The name of the hook to use. This should be a valid TransformerLens hook.
+        moe_router_hook_name (str): The name of the hook to use for the MOE router. This should be a valid TransformerLens hook.
         hook_eval (str): DEPRECATED: Will be removed in v7.0.0. NOT CURRENTLY IN USE. The name of the hook to use for evaluation.
         hook_head_index (int, optional): When the hook is for an activation with a head index, we can specify a specific head to use here.
         dataset_path (str): A Hugging Face dataset path.
@@ -190,6 +191,7 @@ class LanguageModelSAERunnerConfig(Generic[T_TRAINING_SAE_CONFIG]):
     hook_name: str = "blocks.0.hook_mlp_out"
     hook_eval: str = "NOT_IN_USE"
     hook_head_index: int | None = None
+    moe_router_hook_name: str | None = None # model.layers.16.mlp.router
     dataset_path: str = ""
     dataset_trust_remote_code: bool = True
     streaming: bool = True
@@ -466,6 +468,7 @@ class CacheActivationsRunnerConfig:
         model_name (str): The name of the model to use.
         model_batch_size (int): How many prompts are in the batch of the language model when generating activations.
         hook_name (str): The name of the hook to use.
+        moe_router_hook_name (str): The name of the hook to use for the MOE router. This should be a valid TransformerLens hook.
         d_in (int): Dimension of the model.
         total_training_tokens (int): Total number of tokens to process.
         context_size (int): Context size to process. Can be left as -1 if the dataset is tokenized.
@@ -497,6 +500,7 @@ class CacheActivationsRunnerConfig:
     hook_name: str
     d_in: int
     training_tokens: int
+    moe_router_hook_name: str | None = None  # model.layers.16.mlp.router
 
     context_size: int = -1  # Required if dataset is not tokenized
     model_class_name: str = "HookedTransformer"

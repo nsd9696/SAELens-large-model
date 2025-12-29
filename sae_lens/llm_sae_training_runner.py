@@ -153,6 +153,10 @@ class LanguageModelSAETrainingRunner:
                 )
         else:
             self.sae = override_sae
+        
+        # # Set model reference for SAEs that support router entropy (BatchTopK, Gated, JumpReLU)
+        # if hasattr(self.sae, "model"):
+        #     self.sae.model = self.model
 
         self.sae.to(self.cfg.device)
 
@@ -239,6 +243,7 @@ class LanguageModelSAETrainingRunner:
     def _set_sae_metadata(self):
         self.sae.cfg.metadata.dataset_path = self.cfg.dataset_path
         self.sae.cfg.metadata.hook_name = self.cfg.hook_name
+        self.sae.cfg.metadata.moe_router_hook_name = self.cfg.moe_router_hook_name
         self.sae.cfg.metadata.model_name = self.cfg.model_name
         self.sae.cfg.metadata.model_class_name = self.cfg.model_class_name
         self.sae.cfg.metadata.hook_head_index = self.cfg.hook_head_index

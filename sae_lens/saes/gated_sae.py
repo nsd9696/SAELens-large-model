@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 from numpy.typing import NDArray
 from torch import nn
 from typing_extensions import override
@@ -13,7 +14,26 @@ from sae_lens.saes.sae import (
     TrainingSAE,
     TrainingSAEConfig,
     TrainStepInput,
+    TrainStepOutput,
 )
+
+
+def calculate_router_entropy(router_logits: torch.Tensor) -> torch.Tensor:
+    """
+    Calculate the entropy of router logits.
+    
+    Args:
+        router_logits: Router logits tensor of shape [batch_size, num_experts] or [batch_size, seq_len, num_experts]
+    
+    Returns:
+        Entropy value (scalar tensor)
+    """
+    # Apply softmax to get probabilities
+    router_probs = F.softmax(router_logits, dim=-1)
+    # Calculate entropy: -sum(p * log(p))
+    entropy = -(router_probs * torch.log(router_probs + 1e-10)).sum(dim=-1)
+    # Return mean entropy across batch and sequence dimensions
+    return entropy.mean()
 
 
 @dataclass
@@ -107,6 +127,9 @@ class GatedTrainingSAEConfig(TrainingSAEConfig):
 
     l1_coefficient: float = 1.0
     l1_warm_up_steps: int = 0
+    router_entropy_layer: str | None = None  # model.layers.16.mlp.router
+    use_router_entropy: bool = False  # Whether to use router entropy to adjust l1 coefficient
+    router_entropy_weight: float = 0.1  # Weight for router entropy adjustment
 
     @override
     @classmethod
@@ -129,13 +152,27 @@ class GatedTrainingSAE(TrainingSAE[GatedTrainingSAEConfig]):
     b_gate: nn.Parameter  # type: ignore
     b_mag: nn.Parameter  # type: ignore
     r_mag: nn.Parameter  # type: ignore
+    cfg: GatedTrainingSAEConfig  # type: ignore[assignment]
+    model: Any = None  # Reference to the model for accessing router activations
+    router_entropy_buffer: torch.Tensor | None = None  # Buffer for tracking router entropy
 
-    def __init__(self, cfg: GatedTrainingSAEConfig, use_error_term: bool = False):
+    def __init__(self, cfg: GatedTrainingSAEConfig, use_error_term: bool = False, model: Any = None):
         if use_error_term:
             raise ValueError(
                 "GatedSAE does not support `use_error_term`. Please set `use_error_term=False`."
             )
         super().__init__(cfg, use_error_term)
+        
+        self.model = model
+        
+        # Register buffer for tracking router entropy (for normalization)
+        if cfg.use_router_entropy:
+            # Check if buffer already exists (e.g., when loading from dict)
+            if "router_entropy_buffer" not in self._buffers and not hasattr(self, "router_entropy_buffer"):
+                self.register_buffer(
+                    "router_entropy_buffer",
+                    torch.tensor(0.0, dtype=torch.float32, device=self.W_dec.device),
+                )
 
     def initialize_weights(self) -> None:
         super().initialize_weights()
@@ -148,6 +185,19 @@ class GatedTrainingSAE(TrainingSAE[GatedTrainingSAEConfig]):
         Gated forward pass with pre-activation (for training).
         """
         sae_in = self.process_sae_in(x)
+
+        # Get router entropy if enabled
+        router_entropy = None
+        if self.cfg.use_router_entropy and self.cfg.router_entropy_layer is not None and self.model is not None:
+            router_entropy = self._get_router_entropy()
+            if router_entropy is not None:
+                # Update router entropy buffer for normalization
+                if self.router_entropy_buffer is not None:
+                    # Use exponential moving average
+                    lr = 0.01  # Learning rate for entropy tracking
+                    self.router_entropy_buffer = (
+                        (1 - lr) * self.router_entropy_buffer + lr * router_entropy
+                    )
 
         # Gating path
         gating_pre_activation = sae_in @ self.W_enc + self.b_gate
@@ -181,9 +231,22 @@ class GatedTrainingSAE(TrainingSAE[GatedTrainingSAEConfig]):
         pi_gate = sae_in_centered @ self.W_enc + self.b_gate
         pi_gate_act = torch.relu(pi_gate)
 
+        # Adjust l1 coefficient based on router entropy if enabled
+        l1_coefficient = step_input.coefficients["l1"]
+        if self.cfg.use_router_entropy and self.router_entropy_buffer is not None:
+            base_entropy = self.router_entropy_buffer.item()
+            if base_entropy > 0:
+                # Get current router entropy
+                router_entropy = self._get_router_entropy()
+                if router_entropy is not None:
+                    entropy_ratio = router_entropy.item() / (base_entropy + 1e-10)
+                    # Higher entropy -> more uniform -> increase l1 penalty
+                    # Lower entropy -> more concentrated -> decrease l1 penalty
+                    l1_coefficient = l1_coefficient * (1.0 + self.cfg.router_entropy_weight * (entropy_ratio - 1.0))
+
         # L1-like penalty scaled by W_dec norms
         l1_loss = (
-            step_input.coefficients["l1"]
+            l1_coefficient
             * torch.sum(pi_gate_act * self.W_dec.norm(dim=1), dim=-1).mean()
         )
 
@@ -195,6 +258,41 @@ class GatedTrainingSAE(TrainingSAE[GatedTrainingSAEConfig]):
 
         # Return both losses separately
         return {"l1_loss": l1_loss, "auxiliary_reconstruction_loss": aux_recon_loss}
+    
+    @override
+    def training_forward_pass(self, step_input: TrainStepInput) -> TrainStepOutput:
+        output = super().training_forward_pass(step_input)
+        
+        # Log router entropy if available
+        if self.router_entropy_buffer is not None:
+            output.metrics["router_entropy"] = self.router_entropy_buffer.item()
+        
+        return output
+    
+    @torch.no_grad()
+    def _get_router_entropy(self) -> torch.Tensor | None:
+        """
+        Get router entropy from the model's router layer.
+        
+        Returns:
+            Router entropy value or None if not available
+        """
+        if self.model is None or self.cfg.router_entropy_layer is None:
+            return None
+        
+        try:
+            # Try to get router activations from the model's cache
+            # This assumes the model has been run with caching enabled
+            if hasattr(self.model, "cache") and self.model.cache is not None:
+                router_activations = self.model.cache.get(self.cfg.router_entropy_layer, None)
+                if router_activations is not None:
+                    return calculate_router_entropy(router_activations)
+        except Exception as e:
+            # If we can't get router entropy, return None
+            # This allows training to continue even if router entropy is not available
+            pass
+        
+        return None
 
     def log_histograms(self) -> dict[str, NDArray[Any]]:
         """Log histograms of the weights and biases."""

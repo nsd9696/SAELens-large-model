@@ -3,6 +3,7 @@ from typing import Any, Literal
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch import nn
 from typing_extensions import override
 
@@ -13,7 +14,26 @@ from sae_lens.saes.sae import (
     TrainingSAE,
     TrainingSAEConfig,
     TrainStepInput,
+    TrainStepOutput,
 )
+
+
+def calculate_router_entropy(router_logits: torch.Tensor) -> torch.Tensor:
+    """
+    Calculate the entropy of router logits.
+    
+    Args:
+        router_logits: Router logits tensor of shape [batch_size, num_experts] or [batch_size, seq_len, num_experts]
+    
+    Returns:
+        Entropy value (scalar tensor)
+    """
+    # Apply softmax to get probabilities
+    router_probs = F.softmax(router_logits, dim=-1)
+    # Calculate entropy: -sum(p * log(p))
+    entropy = -(router_probs * torch.log(router_probs + 1e-10)).sum(dim=-1)
+    # Return mean entropy across batch and sequence dimensions
+    return entropy.mean()
 
 
 def rectangle(x: torch.Tensor) -> torch.Tensor:
@@ -204,6 +224,10 @@ class JumpReLUTrainingSAEConfig(TrainingSAEConfig):
 
     # only relevant for tanh sparsity loss mode
     jumprelu_tanh_scale: float = 4.0
+    
+    router_entropy_layer: str | None = None  # model.layers.16.mlp.router
+    use_router_entropy: bool = False  # Whether to use router entropy to adjust l0 coefficient
+    router_entropy_weight: float = 0.1  # Weight for router entropy adjustment
 
     @override
     @classmethod
@@ -227,9 +251,14 @@ class JumpReLUTrainingSAE(TrainingSAE[JumpReLUTrainingSAEConfig]):
 
     b_enc: nn.Parameter
     log_threshold: nn.Parameter
+    cfg: JumpReLUTrainingSAEConfig  # type: ignore[assignment]
+    model: Any = None  # Reference to the model for accessing router activations
+    router_entropy_buffer: torch.Tensor | None = None  # Buffer for tracking router entropy
 
-    def __init__(self, cfg: JumpReLUTrainingSAEConfig, use_error_term: bool = False):
+    def __init__(self, cfg: JumpReLUTrainingSAEConfig, use_error_term: bool = False, model: Any = None):
         super().__init__(cfg, use_error_term)
+
+        self.model = model
 
         # We'll store a bandwidth for the training approach, if needed
         self.bandwidth = cfg.jumprelu_bandwidth
@@ -239,6 +268,15 @@ class JumpReLUTrainingSAE(TrainingSAE[JumpReLUTrainingSAEConfig]):
             torch.ones(self.cfg.d_sae, dtype=self.dtype, device=self.device)
             * np.log(cfg.jumprelu_init_threshold)
         )
+        
+        # Register buffer for tracking router entropy (for normalization)
+        if cfg.use_router_entropy:
+            # Check if buffer already exists (e.g., when loading from dict)
+            if "router_entropy_buffer" not in self._buffers and not hasattr(self, "router_entropy_buffer"):
+                self.register_buffer(
+                    "router_entropy_buffer",
+                    torch.tensor(0.0, dtype=torch.float32, device=self.W_dec.device),
+                )
 
     @override
     def initialize_weights(self) -> None:
@@ -264,6 +302,19 @@ class JumpReLUTrainingSAE(TrainingSAE[JumpReLUTrainingSAEConfig]):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         sae_in = self.process_sae_in(x)
 
+        # Get router entropy if enabled
+        router_entropy = None
+        if self.cfg.use_router_entropy and self.cfg.router_entropy_layer is not None and self.model is not None:
+            router_entropy = self._get_router_entropy()
+            if router_entropy is not None:
+                # Update router entropy buffer for normalization
+                if self.router_entropy_buffer is not None:
+                    # Use exponential moving average
+                    lr = 0.01  # Learning rate for entropy tracking
+                    self.router_entropy_buffer = (
+                        (1 - lr) * self.router_entropy_buffer + lr * router_entropy
+                    )
+
         hidden_pre = sae_in @ self.W_enc + self.b_enc
         feature_acts = JumpReLU.apply(hidden_pre, self.threshold, self.bandwidth)
 
@@ -281,17 +332,31 @@ class JumpReLUTrainingSAE(TrainingSAE[JumpReLUTrainingSAEConfig]):
 
         threshold = self.threshold
         W_dec_norm = self.W_dec.norm(dim=1)
+        
+        # Adjust l0 coefficient based on router entropy if enabled
+        l0_coefficient = step_input.coefficients["l0"]
+        if self.cfg.use_router_entropy and self.router_entropy_buffer is not None:
+            base_entropy = self.router_entropy_buffer.item()
+            if base_entropy > 0:
+                # Get current router entropy
+                router_entropy = self._get_router_entropy()
+                if router_entropy is not None:
+                    entropy_ratio = router_entropy.item() / (base_entropy + 1e-10)
+                    # Higher entropy -> more uniform -> increase l0 penalty
+                    # Lower entropy -> more concentrated -> decrease l0 penalty
+                    l0_coefficient = l0_coefficient * (1.0 + self.cfg.router_entropy_weight * (entropy_ratio - 1.0))
+        
         if self.cfg.jumprelu_sparsity_loss_mode == "step":
             l0 = torch.sum(
                 Step.apply(hidden_pre, threshold, self.bandwidth),  # type: ignore
                 dim=-1,
             )
-            l0_loss = (step_input.coefficients["l0"] * l0).mean()
+            l0_loss = (l0_coefficient * l0).mean()
         elif self.cfg.jumprelu_sparsity_loss_mode == "tanh":
             per_item_l0_loss = torch.tanh(
                 self.cfg.jumprelu_tanh_scale * feature_acts * W_dec_norm
             ).sum(dim=-1)
-            l0_loss = (step_input.coefficients["l0"] * per_item_l0_loss).mean()
+            l0_loss = (l0_coefficient * per_item_l0_loss).mean()
         else:
             raise ValueError(
                 f"Invalid sparsity loss mode: {self.cfg.jumprelu_sparsity_loss_mode}"
@@ -307,6 +372,41 @@ class JumpReLUTrainingSAE(TrainingSAE[JumpReLUTrainingSAEConfig]):
                 W_dec_norm,
             )
         return losses
+    
+    @override
+    def training_forward_pass(self, step_input: TrainStepInput) -> TrainStepOutput:
+        output = super().training_forward_pass(step_input)
+        
+        # Log router entropy if available
+        if self.router_entropy_buffer is not None:
+            output.metrics["router_entropy"] = self.router_entropy_buffer.item()
+        
+        return output
+    
+    @torch.no_grad()
+    def _get_router_entropy(self) -> torch.Tensor | None:
+        """
+        Get router entropy from the model's router layer.
+        
+        Returns:
+            Router entropy value or None if not available
+        """
+        if self.model is None or self.cfg.router_entropy_layer is None:
+            return None
+        
+        try:
+            # Try to get router activations from the model's cache
+            # This assumes the model has been run with caching enabled
+            if hasattr(self.model, "cache") and self.model.cache is not None:
+                router_activations = self.model.cache.get(self.cfg.router_entropy_layer, None)
+                if router_activations is not None:
+                    return calculate_router_entropy(router_activations)
+        except Exception as e:
+            # If we can't get router entropy, return None
+            # This allows training to continue even if router entropy is not available
+            pass
+        
+        return None
 
     @override
     def get_coefficients(self) -> dict[str, float | TrainCoefficientConfig]:
