@@ -1,17 +1,25 @@
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 import torch
 import yaml
+from huggingface_hub import hf_hub_download as real_hf_hub_download
+from huggingface_hub.utils import EntryNotFoundError
 from safetensors.torch import save_file
 from sparsify import SparseCoder, SparseCoderConfig
 
 from sae_lens import StandardSAE, StandardSAEConfig
 from sae_lens.loading.pretrained_sae_loaders import (
+    _infer_gemma_3_raw_cfg_dict,
     dictionary_learning_sae_huggingface_loader_1,
+    gemma_2_transcoder_huggingface_loader,
+    gemma_3_sae_huggingface_loader,
     get_deepseek_r1_config_from_hf,
+    get_dictionary_learning_config_1_from_hf,
     get_gemma_2_transcoder_config_from_hf,
+    get_gemma_3_config_from_hf,
     get_goodfire_config_from_hf,
     get_goodfire_huggingface_loader,
     get_llama_scope_config_from_hf,
@@ -150,6 +158,270 @@ def test_load_sae_config_from_huggingface_gemma_2():
     assert cfg_dict == expected_cfg_dict
 
 
+@pytest.mark.parametrize(
+    (
+        "folder_name",
+        "architecture",
+        "hooks",
+        "d_sae",
+        "d_in",
+        "d_out",
+    ),
+    [
+        (
+            "resid_post_all/layer_10_width_262k_l0_small",
+            "jumprelu",
+            {
+                "hook_name": "blocks.10.hook_resid_post",
+                "hf_hook_name": "model.layers.10.output",
+            },
+            262144,
+            1152,
+            None,
+        ),
+        (
+            "transcoder_all/layer_10_width_262k_l0_small_affine",
+            "jumprelu_skip_transcoder",
+            {
+                "hook_name": "blocks.10.ln2.hook_normalized",
+                "hook_name_out": "blocks.10.hook_mlp_out",
+                "hf_hook_name": "model.layers.10.pre_feedforward_layernorm.output",
+                "hf_hook_name_out": "model.layers.10.post_feedforward_layernorm.output",
+            },
+            262144,
+            1152,
+            1152,
+        ),
+        (
+            "attn_out_all/layer_11_width_16k_l0_small",
+            "jumprelu",
+            {
+                "hook_name": "blocks.11.hook_attn_out",
+                "hf_hook_name": "model.layers.11.self_attn.o_proj.input",
+            },
+            16384,
+            1024,
+            None,
+        ),
+    ],
+)
+def test_get_gemma_3_config_from_hf(
+    folder_name: str,
+    architecture: str,
+    hooks: dict[str, str],
+    d_sae: int,
+    d_in: int,
+    d_out: int | None,
+):
+    cfg_dict = get_gemma_3_config_from_hf(
+        "google/gemma-scope-2-1b-pt", folder_name, "cpu"
+    )
+
+    expected_cfg_dict = {
+        "architecture": architecture,
+        "d_in": d_in,
+        "d_sae": d_sae,
+        "dtype": "float32",
+        "model_name": "google/gemma-3-1b-pt",
+        "hook_head_index": None,
+        "finetuning_scaling_factor": False,
+        "sae_lens_training_version": None,
+        "prepend_bos": True,
+        "dataset_path": "monology/pile-uncopyrighted",
+        "context_size": 1024,
+        "apply_b_dec_to_input": False,
+        "normalize_activations": None,
+        "device": "cpu",
+        **hooks,
+    }
+    if d_out is not None:
+        expected_cfg_dict["d_out"] = d_out
+    assert cfg_dict == expected_cfg_dict
+
+
+@pytest.mark.parametrize(
+    ("repo_id", "folder_name", "expected_cfg"),
+    [
+        (
+            "google/gemma-scope-2-1b-pt",
+            "resid_post_all/layer_10_width_262k_l0_small",
+            {
+                "architecture": "jump_relu",
+                "model_name": "google/gemma-3-1b-pt",
+                "hf_hook_point_in": "model.layers.10.output",
+            },
+        ),
+        (
+            "google/gemma-scope-2-4b-it",
+            "transcoder_all/layer_5_width_16k_l0_big_affine",
+            {
+                "architecture": "jump_relu",
+                "model_name": "google/gemma-3-4b-it",
+                "hf_hook_point_in": "model.layers.5.pre_feedforward_layernorm.output",
+                "hf_hook_point_out": "model.layers.5.post_feedforward_layernorm.output",
+            },
+        ),
+        (
+            "google/gemma-scope-2-12b-pt",
+            "attn_out_all/layer_11_width_16k_l0_small",
+            {
+                "architecture": "jump_relu",
+                "model_name": "google/gemma-3-12b-pt",
+                "hf_hook_point_in": "model.layers.11.self_attn.o_proj.input",
+            },
+        ),
+        (
+            "google/gemma-scope-2-27b-it",
+            "mlp_out/layer_17_width_16k_l0_big",
+            {
+                "architecture": "jump_relu",
+                "model_name": "google/gemma-3-27b-it",
+                "hf_hook_point_in": "model.layers.17.post_feedforward_layernorm.output",
+            },
+        ),
+        (
+            "google/gemma-scope-2-270m-pt",
+            "clt/layer_3_width_16k_l0_medium",
+            {
+                "architecture": "jump_relu",
+                "model_name": "google/gemma-3-270m-pt",
+                "hf_hook_point_in": "model.layers.3.pre_feedforward_layernorm.output",
+                "hf_hook_point_out": "model.layers.3.post_feedforward_layernorm.output",
+            },
+        ),
+    ],
+)
+def test_infer_gemma_3_raw_cfg_dict(
+    repo_id: str,
+    folder_name: str,
+    expected_cfg: dict[str, str],
+):
+    cfg = _infer_gemma_3_raw_cfg_dict(repo_id, folder_name)
+    assert cfg == expected_cfg
+
+
+def test_infer_gemma_3_raw_cfg_dict_invalid_folder_name():
+    with pytest.raises(
+        ValueError, match="Could not extract layer number from folder_name"
+    ):
+        _infer_gemma_3_raw_cfg_dict("google/gemma-scope-2-1b-pt", "invalid_folder_name")
+
+
+def test_infer_gemma_3_raw_cfg_dict_unknown_hook_type():
+    with pytest.raises(ValueError, match="Could not infer hook type from folder_name"):
+        _infer_gemma_3_raw_cfg_dict(
+            "google/gemma-scope-2-1b-pt", "unknown_hook/layer_5_width_16k"
+        )
+
+
+def test_gemma_3_sae_huggingface_loader_with_mocked_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    repo_id = "google/gemma-scope-2-1b-pt"
+    folder_name = "resid_post_all/layer_10_width_262k_l0_small"
+    device = "cpu"
+
+    # These dimensions match the real SAE
+    d_in = 1152
+    d_sae = 262144
+
+    # Create mock weights matching the expected safetensors format
+    W_enc = torch.randn(d_in, d_sae, dtype=torch.float32)
+    W_dec = torch.randn(d_sae, d_in, dtype=torch.float32)
+    b_enc = torch.randn(d_sae, dtype=torch.float32)
+    b_dec = torch.randn(d_in, dtype=torch.float32)
+    threshold = torch.randn(d_sae, dtype=torch.float32)
+
+    raw_state_dict = {
+        "w_enc": W_enc,
+        "w_dec": W_dec,
+        "b_enc": b_enc,
+        "b_dec": b_dec,
+        "threshold": threshold,
+    }
+
+    # Save mock weights as safetensors file
+    safetensors_path = tmp_path / "params.safetensors"
+    save_file(raw_state_dict, safetensors_path)
+
+    def mock_hf_hub_download(
+        repo_id: str,  # noqa: ARG001
+        filename: str,
+        subfolder: str | None = None,  # noqa: ARG001
+        force_download: bool = False,  # noqa: ARG001
+        revision: str | None = None,  # noqa: ARG001
+    ) -> str:
+        # config.json doesn't exist for this SAE, causing fallback to _infer_gemma_3_raw_cfg_dict
+        if filename.endswith("config.json"):
+            raise EntryNotFoundError("config.json not found")
+        return str(safetensors_path)
+
+    def mock_get_safetensors_tensor_shapes(
+        repo_id: str,  # noqa: ARG001
+        filename: str,  # noqa: ARG001
+    ) -> dict[str, list[int]]:
+        return {
+            "w_enc": [d_in, d_sae],
+            "w_dec": [d_sae, d_in],
+            "b_enc": [d_sae],
+            "b_dec": [d_in],
+            "threshold": [d_sae],
+        }
+
+    monkeypatch.setattr(
+        "sae_lens.loading.pretrained_sae_loaders.hf_hub_download", mock_hf_hub_download
+    )
+    monkeypatch.setattr(
+        "sae_lens.loading.pretrained_sae_loaders.get_safetensors_tensor_shapes",
+        mock_get_safetensors_tensor_shapes,
+    )
+
+    cfg_dict, state_dict, log_sparsity = gemma_3_sae_huggingface_loader(
+        repo_id=repo_id,
+        folder_name=folder_name,
+        device=device,
+        force_download=False,
+        cfg_overrides=None,
+    )
+
+    # Verify config matches expected values from real SAE
+    expected_cfg = {
+        "architecture": "jumprelu",
+        "d_in": d_in,
+        "d_sae": d_sae,
+        "dtype": "float32",
+        "model_name": "google/gemma-3-1b-pt",
+        "hook_name": "blocks.10.hook_resid_post",
+        "hook_head_index": None,
+        "finetuning_scaling_factor": False,
+        "sae_lens_training_version": None,
+        "prepend_bos": True,
+        "dataset_path": "monology/pile-uncopyrighted",
+        "context_size": 1024,
+        "apply_b_dec_to_input": False,
+        "normalize_activations": None,
+        "hf_hook_name": "model.layers.10.output",
+        "device": "cpu",
+    }
+    assert cfg_dict == expected_cfg
+    assert log_sparsity is None
+
+    # Verify state dict structure and shapes
+    assert set(state_dict.keys()) == {"W_enc", "W_dec", "b_enc", "b_dec", "threshold"}
+    assert state_dict["W_enc"].shape == (d_in, d_sae)
+    assert state_dict["W_dec"].shape == (d_sae, d_in)
+    assert state_dict["b_enc"].shape == (d_sae,)
+    assert state_dict["b_dec"].shape == (d_in,)
+    assert state_dict["threshold"].shape == (d_sae,)
+
+    # Verify values match input
+    torch.testing.assert_close(state_dict["W_enc"], W_enc)
+    torch.testing.assert_close(state_dict["W_dec"], W_dec)
+    torch.testing.assert_close(state_dict["b_enc"], b_enc)
+    torch.testing.assert_close(state_dict["b_dec"], b_dec)
+    torch.testing.assert_close(state_dict["threshold"], threshold)
+
+
 def test_load_sae_config_from_huggingface_gemma_2_hook_z_saes():
     cfg_dict = load_sae_config_from_huggingface(
         "gemma-scope-2b-pt-att",
@@ -222,6 +494,9 @@ def test_load_sae_config_from_huggingface_matches_from_pretrained():
         sae_id="blocks.0.hook_resid_pre",
         device="cpu",
     )
+    # Normalize dtype format - both "float32" and "torch.float32" are equivalent
+    if direct_sae_cfg.get("dtype") == "torch.float32":
+        direct_sae_cfg["dtype"] = "float32"
     assert direct_sae_cfg == from_pretrained_cfg_dict
 
 
@@ -253,6 +528,104 @@ def test_get_gemma_2_transcoder_config_from_hf():
     }
 
     assert cfg == expected_cfg
+
+
+def test_gemma_2_transcoder_huggingface_loader_with_mocked_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    repo_id = "google/gemma-scope-2b-pt-transcoders"
+    folder_name = "layer_3/width_16k/average_l0_54"
+    device = "cpu"
+
+    # These dimensions match the real config from get_gemma_2_transcoder_config_from_hf
+    d_in = 2304
+    d_sae = 16384
+
+    # Create mock weights matching the expected npz format
+    W_enc = np.random.randn(d_in, d_sae).astype(np.float32)
+    W_dec = np.random.randn(d_sae, d_in).astype(np.float32)
+    b_enc = np.random.randn(d_sae).astype(np.float32)
+    b_dec = np.random.randn(d_in).astype(np.float32)
+    threshold = np.random.randn(d_sae).astype(np.float32)
+
+    # Save mock weights as npz file
+    npz_file_path = tmp_path / "params.npz"
+    np.savez(
+        npz_file_path,
+        w_enc=W_enc,
+        w_dec=W_dec,
+        b_enc=b_enc,
+        b_dec=b_dec,
+        threshold=threshold,
+    )
+
+    def mock_hf_hub_download(
+        repo_id: str,  # noqa: ARG001
+        filename: str,  # noqa: ARG001
+        force_download: bool = False,  # noqa: ARG001
+        revision: str | None = None,  # noqa: ARG001
+    ) -> str:
+        return str(npz_file_path)
+
+    monkeypatch.setattr(
+        "sae_lens.loading.pretrained_sae_loaders.hf_hub_download", mock_hf_hub_download
+    )
+
+    cfg_dict, state_dict, log_sparsity = gemma_2_transcoder_huggingface_loader(
+        repo_id=repo_id,
+        folder_name=folder_name,
+        device=device,
+        force_download=False,
+        cfg_overrides=None,
+    )
+
+    # Verify config matches the real config from get_gemma_2_transcoder_config_from_hf
+    expected_cfg = {
+        "architecture": "jumprelu_transcoder",
+        "d_in": 2304,
+        "d_out": 2304,
+        "d_sae": 16384,
+        "dtype": "float32",
+        "device": "cpu",
+        "activation_fn": "relu",
+        "normalize_activations": "none",
+        "model_name": "gemma-2-2b",
+        "hook_name": "blocks.3.ln2.hook_normalized",
+        "hook_name_out": "blocks.3.hook_mlp_out",
+        "hook_head_index": None,
+        "hook_head_index_out": None,
+        "prepend_bos": True,
+        "dataset_path": "monology/pile-uncopyrighted",
+        "context_size": 1024,
+        "apply_b_dec_to_input": False,
+    }
+    assert cfg_dict == expected_cfg
+    assert log_sparsity is None
+
+    # Verify state dict structure and shapes
+    assert set(state_dict.keys()) == {"W_enc", "W_dec", "b_enc", "b_dec", "threshold"}
+    assert state_dict["W_enc"].shape == (d_in, d_sae)
+    assert state_dict["W_dec"].shape == (d_sae, d_in)
+    assert state_dict["b_enc"].shape == (d_sae,)
+    assert state_dict["b_dec"].shape == (d_in,)
+    assert state_dict["threshold"].shape == (d_sae,)
+
+    # Verify values match input (converted to torch tensors)
+    torch.testing.assert_close(
+        state_dict["W_enc"], torch.tensor(W_enc, dtype=torch.float32)
+    )
+    torch.testing.assert_close(
+        state_dict["W_dec"], torch.tensor(W_dec, dtype=torch.float32)
+    )
+    torch.testing.assert_close(
+        state_dict["b_enc"], torch.tensor(b_enc, dtype=torch.float32)
+    )
+    torch.testing.assert_close(
+        state_dict["b_dec"], torch.tensor(b_dec, dtype=torch.float32)
+    )
+    torch.testing.assert_close(
+        state_dict["threshold"], torch.tensor(threshold, dtype=torch.float32)
+    )
 
 
 def test_get_mntss_clt_layer_config_from_hf():
@@ -840,6 +1213,37 @@ def test_sparsify_disk_loader(tmp_path: Path):
     torch.testing.assert_close(state_dict["b_dec"], sparsify_sae.b_dec.data)
 
 
+def test_get_dictionary_learning_config_1_from_hf_andy():
+    cfg_dict = get_dictionary_learning_config_1_from_hf(
+        "andyrdt/saes-llama-3.1-8b-instruct",
+        "resid_post_layer_3/trainer_1",
+        device="cpu",
+        force_download=False,
+        cfg_overrides=None,
+    )
+    assert cfg_dict == {
+        "architecture": "jumprelu",  # BatchTopKSAE uses threshold-based activation
+        "d_in": 4096,
+        "d_sae": 131072,
+        "dtype": "float32",
+        "device": "cpu",
+        "model_name": "Llama-3.1-8B-Instruct",
+        "hook_name": "blocks.3.hook_resid_post",
+        "hook_head_index": None,
+        "activation_fn": "relu",
+        "activation_fn_kwargs": {},
+        "apply_b_dec_to_input": True,
+        "finetuning_scaling_factor": False,
+        "sae_lens_training_version": None,
+        "prepend_bos": True,
+        "dataset_path": "monology/pile-uncopyrighted",
+        "context_size": 1024,
+        "normalize_activations": "none",
+        "neuronpedia_id": None,
+        "dataset_trust_remote_code": True,
+    }
+
+
 @pytest.mark.skip(
     reason="This takes too long since the files are large. Also redundant-ish with the test below."
 )
@@ -851,9 +1255,10 @@ def test_dictionary_learning_sae_huggingface_loader_1_andy():
         force_download=False,
         cfg_overrides=None,
     )
-    assert state_dict.keys() == {"W_enc", "W_dec", "b_dec", "b_enc"}
+    # BatchTopKSAE includes a threshold parameter for JumpReLU-style activation
+    assert state_dict.keys() == {"W_enc", "W_dec", "b_dec", "b_enc", "threshold"}
     assert cfg_dict == {
-        "architecture": "standard",
+        "architecture": "jumprelu",  # BatchTopKSAE uses threshold-based activation
         "d_in": 4096,
         "d_sae": 131072,
         "dtype": "float32",
@@ -877,6 +1282,7 @@ def test_dictionary_learning_sae_huggingface_loader_1_andy():
     assert state_dict["W_dec"].shape == (131072, 4096)
     assert state_dict["b_dec"].shape == (4096,)
     assert state_dict["b_enc"].shape == (131072,)
+    assert state_dict["threshold"].shape == (131072,)
 
 
 def test_dictionary_learning_sae_huggingface_loader_1():
@@ -1173,24 +1579,28 @@ def test_get_mntss_clt_layer_huggingface_loader(
             return str(decoder_path)
         raise ValueError(f"Unexpected filename: {filename}")
 
-    # Mock load_file to return the expected nested structure
-    def mock_load_file(file_path: str, device: str = "cpu") -> dict[str, torch.Tensor]:  # noqa: ARG001
-        if f"W_enc_{folder_name}.safetensors" in file_path:
+    # Mock load_safetensors_weights to return the expected nested structure
+    def mock_load_safetensors_weights(
+        path: str | Path,  # noqa: ARG001
+        device: str = "cpu",  # noqa: ARG001
+        dtype: torch.dtype | str | None = None,  # noqa: ARG001
+    ) -> dict[str, torch.Tensor]:
+        path_str = str(path)
+        if f"W_enc_{folder_name}.safetensors" in path_str:
             return {
                 f"W_enc_{folder_name}": W_enc_tensor,
                 f"b_enc_{folder_name}": b_enc_tensor,
                 f"b_dec_{folder_name}": b_dec_tensor,
             }
-        if f"W_dec_{folder_name}.safetensors" in file_path:
+        if f"W_dec_{folder_name}.safetensors" in path_str:
             return {f"W_dec_{folder_name}": W_dec_tensor}
-        raise ValueError(f"Unexpected file path: {file_path}")
-
-    # Mock hf_hub_url to return a fake URL
-    def mock_hf_hub_url(repo_id_arg: str, filename: str) -> str:  # noqa: ARG001
-        return f"https://huggingface.co/{repo_id_arg}/resolve/main/{filename}"
+        raise ValueError(f"Unexpected file path: {path_str}")
 
     # Mock get_safetensors_tensor_shapes to return expected tensor shapes
-    def mock_get_safetensors_tensor_shapes(url: str) -> dict[str, list[int]]:  # noqa: ARG001
+    def mock_get_safetensors_tensor_shapes(
+        repo_id_arg: str,  # noqa: ARG001
+        filename: str,  # noqa: ARG001
+    ) -> dict[str, list[int]]:
         return {
             f"b_dec_{folder_name}": [d_in],
             f"b_enc_{folder_name}": [d_sae],
@@ -1202,10 +1612,8 @@ def test_get_mntss_clt_layer_huggingface_loader(
         "sae_lens.loading.pretrained_sae_loaders.hf_hub_download", mock_hf_hub_download
     )
     monkeypatch.setattr(
-        "sae_lens.loading.pretrained_sae_loaders.load_file", mock_load_file
-    )
-    monkeypatch.setattr(
-        "sae_lens.loading.pretrained_sae_loaders.hf_hub_url", mock_hf_hub_url
+        "sae_lens.loading.pretrained_sae_loaders.load_safetensors_weights",
+        mock_load_safetensors_weights,
     )
     monkeypatch.setattr(
         "sae_lens.loading.pretrained_sae_loaders.get_safetensors_tensor_shapes",
@@ -1292,3 +1700,167 @@ def test_TemporalSAE_config_from_pretrained():
     }
 
     assert cfg_dict == expected_cfg
+
+
+def test_load_sae_config_from_huggingface_dictionary_learning_matryoshka():
+    cfg_dict = load_sae_config_from_huggingface(
+        "saebench_gemma-2-2b_width-2pow12_date-0108",
+        sae_id="blocks.12.hook_resid_post__trainer_0",
+    )
+
+    expected_cfg_dict = {
+        "d_in": 2304,
+        "d_sae": 4096,
+        "dtype": "float32",
+        "device": "cpu",
+        "apply_b_dec_to_input": True,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+            "model_name": "gemma-2-2b",
+            "hook_name": "blocks.12.hook_resid_post",
+            "hook_head_index": None,
+            "prepend_bos": True,
+            "dataset_path": "monology/pile-uncopyrighted",
+            "context_size": 1024,
+            "neuronpedia_id": "gemma-2-2b/12-sae_bench-matryoshka-res-4k__trainer_0_step_final",
+            "sae_lens_training_version": None,
+        },
+        "architecture": "jumprelu",
+    }
+
+    assert cfg_dict == expected_cfg_dict
+
+
+def test_dictionary_learning_sae_huggingface_loader_1_matryoshka(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    repo_id = "adamkarvonen/saebench_gemma-2-2b_width-2pow12_date-0108"
+    folder_name = "MatryoshkaBatchTopK_gemma-2-2b__0108/resid_post_layer_12/trainer_0"
+    device = "cpu"
+
+    D_IN = 2304
+    D_SAE = 4096
+
+    W_enc = torch.randn(D_IN, D_SAE)
+    W_dec = torch.randn(D_SAE, D_IN)
+    b_enc = torch.randn(D_SAE)
+    b_dec = torch.randn(D_IN)
+    threshold_scalar = 0.5
+
+    raw_state_dict = {
+        "W_enc": W_enc,
+        "W_dec": W_dec,
+        "b_enc": b_enc,
+        "b_dec": b_dec,
+        "threshold": torch.tensor(threshold_scalar),
+    }
+
+    sae_file_path = tmp_path / "ae.pt"
+    torch.save(raw_state_dict, sae_file_path)
+
+    def mock_hf_hub_download(
+        repo_id: str,
+        filename: str,
+        force_download: bool = False,
+    ) -> str:
+        if filename.endswith("ae.pt"):
+            return str(sae_file_path)
+        return real_hf_hub_download(
+            repo_id=repo_id, filename=filename, force_download=force_download
+        )
+
+    monkeypatch.setattr(
+        "sae_lens.loading.pretrained_sae_loaders.hf_hub_download", mock_hf_hub_download
+    )
+
+    cfg_dict, state_dict, sparsity = dictionary_learning_sae_huggingface_loader_1(
+        repo_id,
+        folder_name,
+        device=device,
+        force_download=False,
+        cfg_overrides=None,
+    )
+
+    assert sparsity is None
+    assert state_dict.keys() == {"W_enc", "W_dec", "b_dec", "b_enc", "threshold"}
+    assert cfg_dict == {
+        "architecture": "jumprelu",
+        "d_in": D_IN,
+        "d_sae": D_SAE,
+        "dtype": "float32",
+        "device": device,
+        "model_name": "gemma-2-2b",
+        "hook_name": "blocks.12.hook_resid_post",
+        "hook_head_index": None,
+        "activation_fn": "relu",
+        "activation_fn_kwargs": {},
+        "apply_b_dec_to_input": True,
+        "finetuning_scaling_factor": False,
+        "sae_lens_training_version": None,
+        "prepend_bos": True,
+        "dataset_path": "monology/pile-uncopyrighted",
+        "context_size": 1024,
+        "normalize_activations": "none",
+        "neuronpedia_id": None,
+        "dataset_trust_remote_code": True,
+    }
+    torch.testing.assert_close(state_dict["W_enc"], W_enc)
+    torch.testing.assert_close(state_dict["W_dec"], W_dec)
+    torch.testing.assert_close(state_dict["b_dec"], b_dec)
+    torch.testing.assert_close(state_dict["b_enc"], b_enc)
+    assert state_dict["threshold"].shape == (D_SAE,)
+    assert torch.all(state_dict["threshold"] == threshold_scalar)
+
+
+def test_from_pretrained_warns_when_using_registered_repo_id_directly(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Test that a warning is issued when loading using a repo_id that is in the pretrained_saes.yaml."""
+    D_IN = 768
+    D_SAE = 24576
+
+    # Create mock config and state dict
+    mock_cfg_dict = {
+        "architecture": "standard",
+        "d_in": D_IN,
+        "d_sae": D_SAE,
+        "dtype": "float32",
+        "device": "cpu",
+        "apply_b_dec_to_input": True,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {},
+    }
+    mock_state_dict = {
+        "W_enc": torch.randn(D_IN, D_SAE),
+        "W_dec": torch.randn(D_SAE, D_IN),
+        "b_enc": torch.zeros(D_SAE),
+        "b_dec": torch.zeros(D_IN),
+    }
+
+    def mock_sae_lens_loader(
+        **_kwargs: Any,
+    ) -> tuple[dict[str, Any], dict[str, torch.Tensor], torch.Tensor | None]:
+        return mock_cfg_dict, mock_state_dict, None
+
+    monkeypatch.setattr(
+        "sae_lens.saes.sae.NAMED_PRETRAINED_SAE_LOADERS",
+        {"sae_lens": mock_sae_lens_loader},
+    )
+    monkeypatch.setattr(
+        "sae_lens.saes.sae.get_conversion_loader_name",
+        lambda _release: "sae_lens",
+    )
+
+    # Using repo_id "jbloom/GPT2-Small-SAEs-Reformatted" directly should warn
+    # because it's registered in pretrained_saes.yaml under "gpt2-small-res-jb"
+    with pytest.warns(
+        UserWarning,
+        match=r"You are loading an SAE using the HuggingFace repo_id.*jbloom/GPT2-Small-SAEs-Reformatted.*directly",
+    ):
+        SAE.from_pretrained(
+            release="jbloom/GPT2-Small-SAEs-Reformatted",
+            sae_id="blocks.0.hook_resid_pre",
+            device="cpu",
+        )

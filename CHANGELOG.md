@@ -1,5 +1,465 @@
 # CHANGELOG
 
+## v6.29.0 (2026-01-11)
+
+### Feature
+
+* feat: scalable low-rank correlation matrices for synthetic data SAEs (#621)
+
+* allow low rank correlation matrices for sampling
+
+* vectorizing generate_random_correlation_matrix
+
+* adding helper for generating low rank correlation matrices
+
+* changes from CR
+
+* more CR changes
+
+* fixing tensor shapes in docs ([`92f0ef7`](https://github.com/decoderesearch/SAELens/commit/92f0ef7137679c277023a5f2bf3904781ffedd70))
+
+## v6.28.2 (2026-01-10)
+
+### Chore
+
+* chore: show-hf-hook-in-docs (#619) ([`1f6c480`](https://github.com/decoderesearch/SAELens/commit/1f6c480d775530076f27b8f7c4db4429eee2bccc))
+
+* chore: improved usage docs (#618) ([`d29066c`](https://github.com/decoderesearch/SAELens/commit/d29066cc82337e09acc61646d3d0580ab4ef9056))
+
+### Performance
+
+* perf: vectorizing toy model hierarchy enforcement in hierarchy_modifier() (#620) ([`6ce12db`](https://github.com/decoderesearch/SAELens/commit/6ce12db50505222150189f16fcffbf9b715cebc8))
+
+## v6.28.1 (2026-01-08)
+
+### Chore
+
+* chore: improve prompt for claude code reviews ([`818ed71`](https://github.com/decoderesearch/SAELens/commit/818ed71ab7b1117031e9de944cecfdb3d5f6b788))
+
+### Fix
+
+* fix: better warning message when trying to load a listed SAE from Huggingface (#617)
+
+* fix: better warning message when trying to load a listed SAE directly from huggingface
+
+* fix: add return type annotation to mock_sae_lens_loader
+
+Co-authored-by: David Chanin &lt;chanind@users.noreply.github.com&gt;
+
+---------
+
+Co-authored-by: claude[bot] &lt;41898282+claude[bot]@users.noreply.github.com&gt;
+Co-authored-by: David Chanin &lt;chanind@users.noreply.github.com&gt; ([`e077582`](https://github.com/decoderesearch/SAELens/commit/e0775827bbc49439b2acc32e2f646fc0b0fea6e9))
+
+## v6.28.0 (2026-01-08)
+
+### Chore
+
+* chore: use sticky comments for claude code review (#616) ([`26bf6be`](https://github.com/decoderesearch/SAELens/commit/26bf6bec6cdc3641b017dc046117da3465edf521))
+
+### Feature
+
+* feat: Support for Training Toy SAEs on Synthetic Data (#615)
+
+* WIP toy models
+
+* renaming toy model -&gt; synthetic
+
+* more shuffling
+
+* adding hierarchy modifier
+
+* allow passing multiple modifiers to the activations generator
+
+* adding firing prob helpers and simplifying trainer
+
+* adding mcc eval
+
+* updating hierarchy helpers
+
+* renaming train helper
+
+* simplifying feature dictionary
+
+* adding toy model tutorial
+
+* adding toy model tutorial
+
+* adding docs
+
+* changes from CR
+
+* adding more test coverage
+
+* fixing formatting
+
+* more CR fixes
+
+* adding extra validation to correlation matrix
+
+* more improvements from CR ([`9d942d8`](https://github.com/decoderesearch/SAELens/commit/9d942d847e5d3ae56340ffbe7e62af4175ff3dd9))
+
+## v6.27.3 (2026-01-05)
+
+### Performance
+
+* perf: simplify activation store loading batches (#614)
+
+* perf: simplify activation store loading batches
+
+* fixing benchmark typing
+
+* change from CR ([`4dd0a95`](https://github.com/decoderesearch/SAELens/commit/4dd0a955ad0b4f05d3f97fffc1ed3bb4837a8def))
+
+## v6.27.2 (2026-01-04)
+
+### Fix
+
+* fix: stop mixing buffer from growing indefinitely on high mix fraction (#613) ([`a385f4a`](https://github.com/decoderesearch/SAELens/commit/a385f4aeb9779772e99cba07bb323023fe4721be))
+
+## v6.27.1 (2026-01-02)
+
+### Fix
+
+* fix: handle empty or nearly empty sequences when disable_concat_sequences=True (#611) ([`0e4b3e9`](https://github.com/decoderesearch/SAELens/commit/0e4b3e9397a30659a2f25b469130c197bdc20bba))
+
+## v6.27.0 (2026-01-01)
+
+### Documentation
+
+* docs: adding docs for extending SAELens with custom runners (#610)
+
+* adding docs for extending SAELens with custom runners
+
+* updating docs
+
+* fixing docs typo ([`3c0f86d`](https://github.com/decoderesearch/SAELens/commit/3c0f86db678d0bc97040272ef2a645b3416fcacf))
+
+### Feature
+
+* feat: allow control of the mixing portion used by the activations store (#609)
+
+* feat: allow explicit control of the mixing portion used by the activation store
+
+* disable shuffling when mix_fraction = 0
+
+* cleaning up test
+
+* updating docs from CR
+
+* fixing test ([`f8f0094`](https://github.com/decoderesearch/SAELens/commit/f8f009476c5f2efa322ffacf3c6216fb11f1c8df))
+
+## v6.26.2 (2025-12-28)
+
+### Fix
+
+* fix: properly convert batchtopk SAEs from dictionary_learning library in SAE.from_pretrained. (#608)
+
+* fix: loading of some batchtopk SAEs from pretrained.
+
+Prior to this commit, the following code:
+
+```
+import torch
+from sae_lens import SAE
+from sae_lens.analysis.hooked_sae_transformer import
+HookedSAETransformer
+
+release, sae_id, model_name = &#34;llama-3.1-8b-instruct-andyrdt&#34;,
+&#34;resid_post_layer_23_trainer_1&#34;, &#34;meta-llama/Llama-3.1-8B-Instruct&#34;
+sae = SAE.from_pretrained(release, sae_id, device=&#39;cpu&#39;)
+```
+
+would fail with the error:
+
+```
+    RuntimeError: Error(s) in loading state_dict for StandardSAE:
+        Unexpected key(s) in state_dict: &#34;threshold&#34;.
+```
+It seems likely that many other BatchTopKSAEs, particularly those by the
+same author, would suffer from the same.
+
+Below is a partial history of this issue generated by Claude Code
+and then perused by me for correctness and edited by me for brevity.
+
+The andyrdt SAEs use `dict_class: BatchTopKSAE` in their config, which in
+particular has a field named &#34;threshold&#34;. However, the architecture detection in
+`get_dictionary_learning_config_1_from_hf` only recognized `MatryoshkaBatchTopKSAE`
+as needing the `jumprelu` architecture, not plain `BatchTopKSAE`.
+
+1. **Before commit 58d0cd7** (SAEBench Matryoshka SAEs):
+   - The loader did not add `threshold` to state_dict
+   - BatchTopKSAE loaded as StandardSAE with architecture=&#34;standard&#34;
+   - The threshold parameter was silently discarded
+   - SAEs loaded successfully but **incorrectly**: activations were computed
+     with plain ReLU instead of threshold-masked JumpReLU
+   - This meant wrong latent activations, but no error
+
+2. **After commit 58d0cd7**:
+   - The commit added threshold handling: `if &#34;threshold&#34; in encoder: state_dict[&#34;threshold&#34;] = threshold`
+   - It also added architecture detection for `MatryoshkaBatchTopKSAE` -&gt; `jumprelu`
+   - But `BatchTopKSAE` still fell through to `architecture: standard`
+   - Now the loader includes `threshold` in state_dict, but StandardSAE
+     rejects the unexpected key
+   - SAEs fail to load entirely
+
+There&#39;s a remark in the batchtopk training that they are saved as
+jumprelu SAEs for inference, which seems to have been severely
+misleading for these. My guess about this (which the repo owners should
+know the ground truth about) is that the andyrdt SAEs were trained not
+using this repo, so their conversion to JumpReLU and inclusion of
+&#39;threshold&#39; parameter was simply never supported in the first place.
+
+* add a test to load config for andyrdt saes
+
+---------
+
+Co-authored-by: David Chanin &lt;chanindav@gmail.com&gt; ([`144c9e5`](https://github.com/decoderesearch/SAELens/commit/144c9e5cc51848b5bbcde4d1df65dc26d3e8e988))
+
+## v6.26.1 (2025-12-28)
+
+### Fix
+
+* fix: enable remaining gemma scope 2 transcoders (#607) ([`7a5b4a7`](https://github.com/decoderesearch/SAELens/commit/7a5b4a7ae24ac4f717de9b8ab2358bffd776326d))
+
+### Unknown
+
+* core: fix docs code highlighting issue with 1password plugin (#606) ([`95ebc89`](https://github.com/decoderesearch/SAELens/commit/95ebc89da6e7a18c510f19daedbe9885d8042303))
+
+## v6.26.0 (2025-12-26)
+
+### Feature
+
+* feat: Matching Pursuit SAEs (#601)
+
+* implementing matching pursuit SAE implementation
+
+* optimizing matching pursuit function
+
+* handle 3d inputs
+
+* dtype nonsense
+
+* adding aux loss based on topk saes
+
+* try using more no-grad to reduce mem usage
+
+* further memory improvements for backwards pass
+
+* check convergence less often
+
+* more optimizations
+
+* adding max iterations option
+
+* removing gram option
+
+* removing aux loss from mp saes
+
+* forcing decoder init norm to be 1.0 for mp saes
+
+* adding another test
+
+* adding docs for trainin MP-SAEs
+
+* updating docs further
+
+* changes from Claude CR
+
+* fixing test
+
+* final tweaks pre merge
+
+* adding  option
+
+* fixing docs
+
+* tweaking tests
+
+* fixing docstrings ([`b317d08`](https://github.com/decoderesearch/SAELens/commit/b317d08b9c68938f60219d086cd7c1d573023124))
+
+## v6.25.1 (2025-12-23)
+
+### Performance
+
+* perf: improve memory usage when loading SAEs from pretrained (#603)
+
+* perf: improve memory usage when loading SAEs from pretrained
+
+* fixing tests
+
+* adding more tests
+
+* changes from CR
+
+* more test fixes
+
+* more tests
+
+* updating docstrings ([`25a7ad0`](https://github.com/decoderesearch/SAELens/commit/25a7ad0c56e1f325ce154e1be5cf2521da5dace1))
+
+## v6.25.0 (2025-12-22)
+
+### Feature
+
+* feat: adds some neuronpedia entries for 27b-it (#602) ([`895a90d`](https://github.com/decoderesearch/SAELens/commit/895a90d83986fe3eeeda10f66e0902fcfb53514a))
+
+## v6.24.2 (2025-12-21)
+
+### Chore
+
+* chore: expand user dir when caching saes in docs build (#599) ([`7dcacaa`](https://github.com/decoderesearch/SAELens/commit/7dcacaaf8606504d87a0e4cc5384b1498d89c695))
+
+* chore: improve docs caching in CI (#598) ([`728cb2b`](https://github.com/decoderesearch/SAELens/commit/728cb2b4875b2266c4f2157d3c024427caf5131c))
+
+* chore: cache saes config info when building docs in CI (#597)
+
+* chore: cache saes config info when building docs in CI
+
+* reduce max workers ([`a44e1b1`](https://github.com/decoderesearch/SAELens/commit/a44e1b127cd4144e151fcaac9ba71e0b6385d7bd))
+
+### Fix
+
+* fix: gemma 3 270m workaround is no longer needed (#600) ([`c090df3`](https://github.com/decoderesearch/SAELens/commit/c090df38ce13c20374da3522ea3782d2789e4938))
+
+## v6.24.1 (2025-12-20)
+
+### Fix
+
+* fix: skip invalid gemma scope 2 transcoders (#596) ([`d388d32`](https://github.com/decoderesearch/SAELens/commit/d388d328fb0b4f8b6b273e416ee922256dbd7aba))
+
+## v6.24.0 (2025-12-19)
+
+### Documentation
+
+* docs: cleaner pretrained saes table (#594) ([`6c6c408`](https://github.com/decoderesearch/SAELens/commit/6c6c4082535554699238ec5e11693ab219fd0abf))
+
+### Feature
+
+* feat: Gemma Scope 2 (#595)
+
+* adding loaders for gs
+
+* adding transcoder loading
+
+* fixing transcoder loading / adding config tests
+
+* adding d_out to transcoder cfg
+
+* support loading CLTs
+
+* update loaders for new gemma-scope configs
+
+* updating pretrained_saes.yaml
+
+* add some neuronpedia entries to the pretrained yaml
+
+* fix: gemma 270m doesnt have pt, 270m SAE directory workaround
+
+* fix: 270m doesn&#39;t have pt
+
+* change gg/gs -&gt; google
+
+* add fallback to infer confg dict if missing from repo
+
+* fixing gemma-scope-2 SAE ids
+
+* fixing linting
+
+* hackily fixing new typing issue
+
+---------
+
+Co-authored-by: Johnny Lin &lt;hijohnnylin@gmail.com&gt; ([`10d3aea`](https://github.com/decoderesearch/SAELens/commit/10d3aeac13d7d30c8c235f4c02de0b7e58f823f0))
+
+## v6.23.0 (2025-12-18)
+
+### Chore
+
+* chore: remove unused CI disk space  (#593)
+
+* chore: delete extra models after download in CI
+
+* use a github action to clean up disk space at start of CI ([`ec2613c`](https://github.com/decoderesearch/SAELens/commit/ec2613cb966ddad8070b20ccc70a92f85f0efff4))
+
+### Feature
+
+* feat: SAEBench Matryoshka SAEs (#592)
+
+* Load SAEBench Matryoshka SAEs
+
+The Matryoshka SAEs trained for SAEBench aren&#39;t supported by the
+dictionary learning loader. This commit implements a loader and adds
+some of the SAEs to the pretrained SAE config.
+
+An automated test is included, and the following script was used to test
+loading the individual SAEs and check their fraction of variance
+explained is within range.
+
+```
+import torch
+from transformer_lens import HookedTransformer
+from sae_lens.evals import get_sparsity_and_variance_metrics
+from sae_lens.training.activation_scaler import ActivationScaler
+from sae_lens.training.activations_store import ActivationsStore
+from sae_lens import SAE
+from itertools import product
+
+device = &#34;cuda&#34; if torch.cuda.is_available() else &#34;cpu&#34;
+
+sae_ids = [f&#34;blocks.12.hook_resid_post__trainer_{i}&#34; for i in range(6)]
+releases = [
+    &#34;saebench_gemma-2-2b_width-2pow12_date-0108&#34;,
+    &#34;saebench_gemma-2-2b_width-2pow14_date-0107&#34;,
+    &#34;saebench_gemma-2-2b_width-2pow16_date-0107&#34;,
+]
+
+model = HookedTransformer.from_pretrained(&#34;gemma-2-2b&#34;, device=device)
+
+for release, sae_id in product(releases, sae_ids):
+    sae = SAE.from_pretrained(
+        release = release,
+        sae_id = sae_id,
+        device = device,
+    )
+
+    activation_store = ActivationsStore.from_sae(
+        model=model,
+        sae=sae,
+        dataset=&#34;NeelNanda/pile-10k&#34;,
+        dataset_trust_remote_code=False,
+        streaming=False,
+        store_batch_size_prompts=8,
+        device=device,
+    )
+
+    with torch.no_grad():
+        variance_metrics, _ = get_sparsity_and_variance_metrics(
+            sae=sae,
+            model=model,
+            activation_store=activation_store,
+            activation_scaler=ActivationScaler(),
+            n_batches=32,
+            compute_l2_norms=False,
+            compute_sparsity_metrics=True,
+            compute_variance_metrics=True,
+            compute_featurewise_density_statistics=False,
+            eval_batch_size_prompts=32,
+            model_kwargs={},
+        )
+
+    explained_variance = variance_metrics[&#34;explained_variance&#34;]
+    sparsity = variance_metrics[&#34;l0&#34;]
+    print(f&#34;{release:&lt;45} {sae_id:&lt;40} {sparsity:&lt;10} {explained_variance:&lt;15}&#34;)
+```
+
+* minor changes to PR code
+
+---------
+
+Co-authored-by: pleask &lt;pleask@pleask.dur.ac.uk&gt;
+Co-authored-by: David Chanin &lt;chanindav@gmail.com&gt; ([`58d0cd7`](https://github.com/decoderesearch/SAELens/commit/58d0cd7318852648f2e401d5cc25e8b6654ad06d))
+
 ## v6.22.3 (2025-11-24)
 
 ### Chore

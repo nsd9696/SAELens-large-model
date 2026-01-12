@@ -14,6 +14,8 @@ SAELens exists to help researchers:
 - Analyse sparse autoencoders / research mechanistic interpretability.
 - Generate insights which make it easier to create safe and aligned AI systems.
 
+SAELens inference works with any PyTorch-based model, not just TransformerLens. While we provide deep integration with TransformerLens via `HookedSAETransformer`, SAEs can be used with Hugging Face Transformers, NNsight, or any other framework by extracting activations and passing them to the SAE's `encode()` and `decode()` methods.
+
 Please refer to the [documentation](https://decoderesearch.github.io/SAELens/) for information on how to:
 
 - Download and Analyse pre-trained sparse autoencoders.
@@ -26,7 +28,7 @@ This library is maintained by [Joseph Bloom](https://www.decoderesearch.com/), [
 
 ## Loading Pre-trained SAEs.
 
-Pre-trained SAEs for various models can be imported via SAE Lens. See this [page](https://decoderesearch.github.io/SAELens/sae_table/) in the readme for a list of all SAEs.
+Pre-trained SAEs for various models can be imported via SAE Lens. See this [page](https://decoderesearch.github.io/SAELens/pretrained_saes/) for a list of all SAEs.
 
 ## Migrating to SAELens v6
 
@@ -41,10 +43,20 @@ The new v6 update is a major refactor to SAELens and changes the way training co
   [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://githubtocolab.com/decoderesearch/SAELens/blob/main/tutorials/logits_lens_with_features.ipynb)
 - [Training a Sparse Autoencoder](tutorials/training_a_sparse_autoencoder.ipynb)
   [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://githubtocolab.com/decoderesearch/SAELens/blob/main/tutorials/training_a_sparse_autoencoder.ipynb)
+- [Training SAEs on Synthetic Data](tutorials/training_saes_on_synthetic_data.ipynb)
+  [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://githubtocolab.com/decoderesearch/SAELens/blob/main/tutorials/training_saes_on_synthetic_data.ipynb)
 
 ## Join the Slack!
 
 Feel free to join the [Open Source Mechanistic Interpretability Slack](https://join.slack.com/t/opensourcemechanistic/shared_invite/zt-375zalm04-GFd5tdBU1yLKlu_T_JSqZQ) for support!
+
+## Other SAE Projects
+
+- [dictionary-learning](https://github.com/saprmarks/dictionary_learning): An SAE training library that focuses on having hackable code.
+- [Sparsify](https://github.com/EleutherAI/sparsify): A lean SAE training library focused on TopK SAEs.
+- [Overcomplete](https://github.com/KempnerInstitute/overcomplete): SAE training library focused on vision models.
+- [SAE-Vis](https://github.com/callummcdougall/sae_vis): A library for visualizing SAE features, works with SAELens.
+- [SAEBench](https://github.com/adamkarvonen/SAEBench): A suite of LLM SAE benchmarks, works with SAELens.
 
 ## Citation
 

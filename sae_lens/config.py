@@ -17,9 +17,14 @@ from datasets import (
 )
 
 from sae_lens import __version__, logger
-from sae_lens.constants import DTYPE_MAP
+
+# keeping this unused import since some SAELens deps import DTYPE_MAP from config
+from sae_lens.constants import (
+    DTYPE_MAP,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 from sae_lens.registry import get_sae_training_class
 from sae_lens.saes.sae import TrainingSAEConfig
+from sae_lens.util import str_to_dtype
 
 if TYPE_CHECKING:
     pass
@@ -144,6 +149,7 @@ class LanguageModelSAERunnerConfig(Generic[T_TRAINING_SAE_CONFIG]):
         seqpos_slice (tuple[int | None, ...]): Determines slicing of activations when constructing batches during training. The slice should be (start_pos, end_pos, optional[step_size]), e.g. for Othello we sometimes use (5, -5). Note, step_size > 0.
         disable_concat_sequences (bool): Whether to disable concatenating sequences and ignore sequences shorter than the context size. If True, disables concatenating and ignores short sequences.
         sequence_separator_token (int | Literal["bos", "eos", "sep"] | None): If not `None`, this token will be placed between sentences in a batch to act as a separator. By default, this is the `<bos>` token.
+        activations_mixing_fraction (float): Fraction of the activation buffer to keep for mixing with new activations (default 0.5). Higher values mean more temporal shuffling but slower throughput. If 0, activations are served in order without shuffling (no temporal mixing).
         device (str): The device to use. Usually "cuda".
         act_store_device (str): The device to use for the activation store. "cpu" is advised in order to save VRAM. Defaults to "with_model" which uses the same device as the main model.
         seed (int): The seed to use.
@@ -214,6 +220,7 @@ class LanguageModelSAERunnerConfig(Generic[T_TRAINING_SAE_CONFIG]):
     sequence_separator_token: int | Literal["bos", "eos", "sep"] | None = (
         special_token_field(default="bos")
     )
+    activations_mixing_fraction: float = 0.5
 
     # Misc
     device: str = "cpu"
@@ -567,7 +574,7 @@ class CacheActivationsRunnerConfig:
 
     @property
     def bytes_per_token(self) -> int:
-        return self.d_in * DTYPE_MAP[self.dtype].itemsize
+        return self.d_in * str_to_dtype(self.dtype).itemsize
 
     @property
     def n_tokens_in_buffer(self) -> int:

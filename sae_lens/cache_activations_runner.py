@@ -14,9 +14,9 @@ from transformer_lens.HookedTransformer import HookedRootModule
 
 from sae_lens import logger
 from sae_lens.config import CacheActivationsRunnerConfig
-from sae_lens.constants import DTYPE_MAP
 from sae_lens.load_model import load_model
 from sae_lens.training.activations_store import ActivationsStore
+from sae_lens.util import str_to_dtype
 
 
 def _mk_activations_store(
@@ -97,7 +97,7 @@ class CacheActivationsRunner:
         bytes_per_token = (
             self.cfg.d_in * self.cfg.dtype.itemsize
             if isinstance(self.cfg.dtype, torch.dtype)
-            else DTYPE_MAP[self.cfg.dtype].itemsize
+            else str_to_dtype(self.cfg.dtype).itemsize
         )
         total_training_tokens = self.cfg.n_seq_in_dataset * self.context_size
         total_disk_space_gb = total_training_tokens * bytes_per_token / 10**9
@@ -263,14 +263,21 @@ class CacheActivationsRunner:
 
         for i in tqdm(range(self.cfg.n_buffers), desc="Caching activations"):
             try:
-                buffer = self.activations_store.get_raw_buffer(
-                    self.cfg.n_batches_in_buffer, shuffle=False
-                )
-                shard = self._create_shard(buffer)
+                # Accumulate n_batches_in_buffer batches into one shard
+                buffers: list[tuple[torch.Tensor, torch.Tensor | None]] = []
+                for _ in range(self.cfg.n_batches_in_buffer):
+                    buffers.append(self.activations_store.get_raw_llm_batch())
+                # Concatenate all batches
+                acts = torch.cat([b[0] for b in buffers], dim=0)
+                token_ids: torch.Tensor | None = None
+                if buffers[0][1] is not None:
+                    # All batches have token_ids if the first one does
+                    token_ids = torch.cat([b[1] for b in buffers], dim=0)  # type: ignore[arg-type]
+                shard = self._create_shard((acts, token_ids))
                 shard.save_to_disk(
                     f"{tmp_cached_activation_path}/shard_{i:05d}", num_shards=1
                 )
-                del buffer, shard
+                del buffers, acts, token_ids, shard
             except StopIteration:
                 logger.warning(
                     f"Warning: Ran out of samples while filling the buffer at batch {i} before reaching {self.cfg.n_buffers} batches."
